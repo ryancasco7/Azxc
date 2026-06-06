@@ -34,26 +34,70 @@ window.MathBOTDB = (function () {
     };
   }
 
+  function withTimeout(promise, ms, message) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))
+    ]);
+  }
+
+  async function fetchConfig() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch('/api/config', { signal: controller.signal });
+      if (!res.ok) throw new Error('config endpoint failed');
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function init() {
-    const res = await fetch('/api/config');
-    if (!res.ok) throw new Error('Failed to load Supabase config. Deploy with env vars set.');
-    const { url, anonKey } = await res.json();
-    supabase = window.supabase.createClient(url, anonKey);
+    let url, anonKey;
+    try {
+      ({ url, anonKey } = await fetchConfig());
+    } catch {
+      if (window.__MATHBOT_CONFIG__) {
+        ({ url, anonKey } = window.__MATHBOT_CONFIG__);
+      } else {
+        throw new Error('Failed to load Supabase config. Run "npm run dev" locally or set env vars on Vercel.');
+      }
+    }
+    if (!url || !anonKey) throw new Error('Supabase URL and anon key are required.');
+
+    if (!window.supabase?.createClient) {
+      throw new Error('Supabase library failed to load. Check your internet connection.');
+    }
+
+    supabase = window.supabase.createClient(url, anonKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
+    });
     supabase.auth.onAuthStateChange(async (event) => {
-      if (event === 'SIGNED_IN') await loadProfile();
+      if (event === 'SIGNED_IN') await loadProfile().catch(() => { currentProfile = null; });
       if (event === 'SIGNED_OUT') currentProfile = null;
     });
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session) await loadProfile();
+
+    // Restore session in background — never block page load on auth
+    withTimeout(supabase.auth.getSession(), 5000, 'session check')
+      .then(async ({ data: { session } }) => {
+        if (session) await withTimeout(loadProfile(), 5000, 'profile load').catch(() => { currentProfile = null; });
+      })
+      .catch(() => { currentProfile = null; });
+
     return supabase;
   }
 
   function getClient() { return supabase; }
 
   async function loadProfile() {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await withTimeout(supabase.auth.getUser(), 5000, 'getUser timed out');
     if (!user) { currentProfile = null; return null; }
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+    const { data, error } = await withTimeout(
+      supabase.from('profiles').select('*').eq('id', user.id).single(),
+      5000,
+      'profile query timed out'
+    );
     if (error) throw error;
     currentProfile = mapProfile(data);
     return currentProfile;
@@ -92,14 +136,19 @@ window.MathBOTDB = (function () {
   }
 
   async function getSession() {
-    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { session } } = await withTimeout(supabase.auth.getSession(), 5000, 'getSession timed out');
     return session;
+  }
+
+  async function ensureProfile() {
+    if (currentProfile) return currentProfile;
+    return loadProfile().catch(() => null);
   }
 
   async function requireAuth(role = null) {
     const session = await getSession();
     if (!session) return null;
-    if (!currentProfile) await loadProfile();
+    if (!currentProfile) await ensureProfile();
     if (!currentProfile) return null;
     if (currentProfile.status === 'banned') {
       await logout();
@@ -274,11 +323,88 @@ window.MathBOTDB = (function () {
     return days;
   }
 
-  async function getActivationCodes(filter = 'all') {
+  async function getActivationCodes(filter = 'all', typeFilter = 'all') {
     let q = supabase.from('activation_codes').select('*').order('generated_at', { ascending: false });
     if (filter === 'used') q = q.eq('status', 'used');
     if (filter === 'unused') q = q.eq('status', 'unused');
+    if (filter === 'expired') q = q.eq('status', 'expired');
+    if (typeFilter === 'standard') q = q.eq('code_type', 'standard');
+    if (typeFilter === 'free') q = q.eq('code_type', 'free');
     const { data } = await q;
+    return (data || []).map(c => ({
+      ...c,
+      code_type: c.code_type || 'standard',
+      max_uses: c.max_uses ?? 1,
+      use_count: c.use_count ?? 0
+    }));
+  }
+
+  async function getActivePromotions() {
+    const { data, error } = await supabase.rpc('get_active_promotions');
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function adminGetPromotions() {
+    const { data, error } = await supabase.rpc('admin_get_promotions');
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function adminSavePromotion(promo) {
+    const { data, error } = await supabase.rpc('admin_save_promotion', {
+      p_id: promo.id || null,
+      p_title: promo.title,
+      p_description: promo.description,
+      p_start_at: promo.start_at,
+      p_end_at: promo.end_at,
+      p_bonus_type: promo.bonus_type,
+      p_bonus_amount: promo.bonus_type === 'fixed' ? promo.bonus_amount : null,
+      p_bonus_percent: promo.bonus_type === 'percentage' ? promo.bonus_percent : null,
+      p_eligibility: promo.eligibility || '',
+      p_is_active: promo.is_active !== false
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function adminTogglePromotion(id, active) {
+    const { error } = await supabase.rpc('admin_toggle_promotion', { p_id: id, p_active: active });
+    if (error) throw error;
+  }
+
+  async function adminDeletePromotion(id) {
+    const { error } = await supabase.rpc('admin_delete_promotion', { p_id: id });
+    if (error) throw error;
+  }
+
+  async function adminAdjustBalance(userId, amount, type, reason, allowNegative = false) {
+    const { data, error } = await supabase.rpc('admin_adjust_balance', {
+      p_user_id: userId,
+      p_amount: amount,
+      p_adjustment_type: type,
+      p_reason: reason,
+      p_allow_negative: allowNegative
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function adminGetBalanceAdjustments(userId = null) {
+    const { data, error } = await supabase.rpc('admin_get_balance_adjustments', { p_user_id: userId });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function adminGetAuditLogs() {
+    const { data, error } = await supabase.rpc('admin_get_audit_logs');
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function adminGetAllNotifications() {
+    const { data, error } = await supabase.rpc('admin_get_all_notifications');
+    if (error) throw error;
     return data || [];
   }
 
@@ -297,8 +423,24 @@ window.MathBOTDB = (function () {
     return users;
   }
 
-  async function adminGenerateCodes(count) {
-    const { data, error } = await supabase.rpc('admin_generate_codes', { p_count: count });
+  async function adminGenerateCodes(count, codeType = 'standard', expiresAt = null, maxUses = 1) {
+    const { data, error } = await supabase.rpc('admin_generate_codes', {
+      p_count: count,
+      p_code_type: codeType,
+      p_expires_at: expiresAt,
+      p_max_uses: maxUses
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function adminCreateCode(codeId, codeType = 'standard', expiresAt = null, maxUses = 1) {
+    const { data, error } = await supabase.rpc('admin_create_code', {
+      p_code_id: codeId,
+      p_code_type: codeType,
+      p_expires_at: expiresAt,
+      p_max_uses: maxUses
+    });
     if (error) throw error;
     return data;
   }
@@ -367,15 +509,17 @@ window.MathBOTDB = (function () {
   }
 
   return {
-    init, getClient, login, logout, register, getSession, requireAuth,
+    init, getClient, login, logout, register, getSession, ensureProfile, requireAuth,
     getProfile, loadProfile, refreshProfile, fetchProfileById,
     getUserQuestionKeys, saveQuestionKey,
     submitAnswer, getRecentEarnings, getDailyLeaderboard, getTopEarners,
     getNotifications, markNotificationsRead,
     getPendingAmount, getUserWithdrawals, requestWithdrawal, getAllWithdrawals,
     getAdminStats, getLast7DaysUsers, getLast7DaysEarnings,
-    getActivationCodes, getAllUsers,
-    adminGenerateCodes, adminDisableCode, adminDeleteCode,
+    getActivationCodes, getAllUsers, getActivePromotions,
+    adminGetPromotions, adminSavePromotion, adminTogglePromotion, adminDeletePromotion,
+    adminAdjustBalance, adminGetBalanceAdjustments, adminGetAuditLogs, adminGetAllNotifications,
+    adminGenerateCodes, adminCreateCode, adminDisableCode, adminDeleteCode,
     adminUpdateUser, adminToggleBan, adminDeleteUser, adminProcessWithdrawal,
     subscribe, unsubscribeAll, mapProfile
   };

@@ -3,7 +3,13 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "test:api": "node scripts/test-api.mjs",
+    "check:migration": "node scripts/check-migration.mjs"
+  },
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.1"
+    "@supabase/supabase-js": "^2.49.1",
+    "dotenv": "^16.4.7"
   }
 }

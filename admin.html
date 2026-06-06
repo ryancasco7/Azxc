@@ -42,26 +42,58 @@
     </div>
 
     <div class="admin-tabs">
-      <button class="admin-tab active" data-panel="codes">Activation Codes</button>
+      <button class="admin-tab active" data-panel="promotions">Promotions</button>
+      <button class="admin-tab" data-panel="codes">Activation Codes</button>
       <button class="admin-tab" data-panel="users">Users</button>
+      <button class="admin-tab" data-panel="adjustments">Balance Adjustments</button>
       <button class="admin-tab" data-panel="withdrawals">Withdrawals</button>
+      <button class="admin-tab" data-panel="notifications">Notifications</button>
+      <button class="admin-tab" data-panel="audit">Audit Logs</button>
       <button class="admin-tab" data-panel="activity">Activity</button>
     </div>
 
-    <div id="panel-codes" class="admin-panel active">
+    <div id="panel-promotions" class="admin-panel active">
       <div class="admin-toolbar">
-        <button id="generate-code-btn" class="btn btn-primary btn-sm">Generate Code</button>
-        <input type="number" id="code-count" value="5" min="1" max="50" style="width:70px;">
-        <button id="generate-multi-btn" class="btn btn-outline btn-sm">Generate Multiple</button>
+        <button id="new-promotion-btn" class="btn btn-primary btn-sm">+ New Promotion</button>
+      </div>
+      <div class="card table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Title</th><th>Bonus</th><th>Period</th><th>Status</th><th>Eligibility</th><th>Actions</th></tr></thead>
+          <tbody id="promotions-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="panel-codes" class="admin-panel">
+      <div class="admin-toolbar admin-toolbar-wrap">
+        <div class="toolbar-group">
+          <span class="toolbar-label">Standard</span>
+          <button id="generate-code-btn" class="btn btn-primary btn-sm">Generate 1</button>
+          <input type="number" id="code-count" value="5" min="1" max="50" style="width:70px;">
+          <button id="generate-multi-btn" class="btn btn-outline btn-sm">Generate Bulk</button>
+        </div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">Free (no referral reward)</span>
+          <button id="generate-free-btn" class="btn btn-primary btn-sm">Generate Free</button>
+          <input type="number" id="free-code-count" value="5" min="1" max="50" style="width:70px;">
+          <input type="datetime-local" id="free-code-expiry" title="Expiration (optional)">
+          <input type="number" id="free-code-max-uses" value="1" min="1" max="100" style="width:60px;" title="Max uses">
+        </div>
         <div class="filter-pills">
-          <button class="active" data-code-filter="all">All</button>
+          <button class="active" data-code-type-filter="all">All Types</button>
+          <button data-code-type-filter="standard">Standard</button>
+          <button data-code-type-filter="free">Free</button>
+        </div>
+        <div class="filter-pills">
+          <button class="active" data-code-filter="all">All Status</button>
           <button data-code-filter="unused">Unused</button>
           <button data-code-filter="used">Used</button>
+          <button data-code-filter="expired">Expired</button>
         </div>
       </div>
       <div class="card table-wrap">
         <table class="data-table">
-          <thead><tr><th>Code ID</th><th>Generated</th><th>Status</th><th>User</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Code</th><th>Type</th><th>Generated</th><th>Expires</th><th>Uses</th><th>Status</th><th>Redeemed By</th><th>Actions</th></tr></thead>
           <tbody id="codes-table-body"></tbody>
         </table>
       </div>
@@ -92,10 +124,87 @@
       </div>
     </div>
 
+    <div id="panel-adjustments" class="admin-panel">
+      <div class="card table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Date</th><th>User</th><th>Type</th><th>Amount</th><th>Previous</th><th>New</th><th>Admin</th><th>Reason</th></tr></thead>
+          <tbody id="adjustments-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="panel-notifications" class="admin-panel">
+      <div class="card table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Date</th><th>User</th><th>Type</th><th>Message</th><th>Read</th></tr></thead>
+          <tbody id="notifications-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="panel-audit" class="admin-panel">
+      <div class="card table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Date</th><th>Action</th><th>Admin</th><th>Details</th></tr></thead>
+          <tbody id="audit-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div id="panel-activity" class="admin-panel">
       <div class="card" id="admin-activity"></div>
     </div>
   </main>
+
+  <div id="promotion-modal" class="modal">
+    <div class="modal-content modal-lg">
+      <div class="modal-header">
+        <h3 id="promotion-modal-title">New Promotion</h3>
+        <button class="btn-icon" data-close-modal>✕</button>
+      </div>
+      <input type="hidden" id="promo-id">
+      <div class="form-group"><label>Title</label><input type="text" id="promo-title" required></div>
+      <div class="form-group"><label>Description</label><textarea id="promo-description" rows="3"></textarea></div>
+      <div class="grid-2">
+        <div class="form-group"><label>Start</label><input type="datetime-local" id="promo-start" required></div>
+        <div class="form-group"><label>End</label><input type="datetime-local" id="promo-end" required></div>
+      </div>
+      <div class="form-group">
+        <label>Bonus Type</label>
+        <select id="promo-bonus-type">
+          <option value="fixed">Fixed Amount (₱)</option>
+          <option value="percentage">Percentage (%)</option>
+        </select>
+      </div>
+      <div class="form-group" id="promo-amount-group"><label>Bonus Amount (₱)</label><input type="number" id="promo-amount" step="0.01" min="0.01"></div>
+      <div class="form-group hidden" id="promo-percent-group"><label>Bonus Percent (%)</label><input type="number" id="promo-percent" step="0.1" min="0.1"></div>
+      <div class="form-group"><label>Eligibility Requirements</label><textarea id="promo-eligibility" rows="2" placeholder="e.g. Minimum 10 correct answers"></textarea></div>
+      <label class="checkbox-label"><input type="checkbox" id="promo-active" checked> Active</label>
+      <button id="save-promotion-btn" class="btn btn-primary btn-block mt-1">Save Promotion</button>
+    </div>
+  </div>
+
+  <div id="balance-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Adjust Balance</h3>
+        <button class="btn-icon" data-close-modal>✕</button>
+      </div>
+      <input type="hidden" id="balance-user-id">
+      <p id="balance-user-info" class="text-muted mb-1"></p>
+      <div class="form-group">
+        <label>Adjustment Type</label>
+        <select id="balance-type">
+          <option value="add">Add Funds</option>
+          <option value="deduct">Deduct Funds</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Amount (₱)</label><input type="number" id="balance-amount" step="0.01" min="0.01" required></div>
+      <div class="form-group"><label>Reason / Remarks</label><textarea id="balance-reason" rows="3" required placeholder="Required — recorded in audit log"></textarea></div>
+      <label class="checkbox-label"><input type="checkbox" id="balance-allow-negative"> Allow negative balance</label>
+      <button id="save-balance-btn" class="btn btn-primary btn-block mt-1">Apply Adjustment</button>
+    </div>
+  </div>
 
   <div id="edit-user-modal" class="modal">
     <div class="modal-content">
@@ -121,7 +230,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/db.js"></script>
-  <script src="app.js"></script>
+  <script src="js/db.js?v=5"></script>
+  <script src="js/app.js?v=5"></script>
 </body>
 </html>

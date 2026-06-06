@@ -44,14 +44,20 @@
 
   function showLoader(show = true) {
     let loader = $('#app-loader');
+    if (!show) {
+      if (loader) loader.remove();
+      return;
+    }
     if (!loader) {
       loader = document.createElement('div');
       loader.id = 'app-loader';
       loader.innerHTML = '<div class="loader-spinner"></div><p>Loading MathBOT...</p>';
       document.body.appendChild(loader);
     }
-    loader.classList.toggle('hidden', !show);
   }
+
+  // Failsafe: never leave the loading overlay up more than 4 seconds
+  setTimeout(() => showLoader(false), 4000);
 
   function escapeHtml(str) {
     const d = document.createElement('div');
@@ -197,9 +203,13 @@
 
   async function guardPage(role = null) {
     const auth = await DB.requireAuth(role);
-    if (!auth) { window.location.href = 'login.html'; return null; }
+    if (!auth) {
+      if (!window.location.pathname.endsWith('login.html')) window.location.replace('login.html');
+      return null;
+    }
     if (auth.forbidden) {
-      window.location.href = auth.profile.role === 'admin' ? 'admin.html' : 'dashboard.html';
+      const dest = auth.profile.role === 'admin' ? 'admin.html' : 'dashboard.html';
+      if (!window.location.pathname.endsWith(dest)) window.location.replace(dest);
       return null;
     }
     return auth;
@@ -225,6 +235,7 @@
     set('#stat-accuracy', accuracy + '%');
     set('#referral-username', user.username);
 
+    await renderUserPromotions();
     await renderActivityFeed('#activity-feed', 8);
     const daily = await DB.getDailyLeaderboard();
     const top = await DB.getTopEarners();
@@ -232,15 +243,55 @@
     renderLeaderboard('#top-earners', top.map(e => [e.username, e.total]));
     await renderNotifications(user.id);
 
-    DB.subscribe(['profiles', 'earnings', 'notifications'], () => {
+    DB.subscribe(['profiles', 'earnings', 'notifications', 'promotions'], () => {
       DB.refreshProfile().then(u => {
         if (!u) return;
         set('#total-earnings', formatPHP(u.earnings + u.referralEarnings));
         set('#referral-count', String(u.referralCount));
         renderNotifications(u.id);
+        renderUserPromotions();
         renderActivityFeed('#activity-feed', 8);
       });
     });
+  }
+
+  async function renderUserPromotions() {
+    const el = $('#promotions-list');
+    if (!el) return;
+    try {
+      const promos = await DB.getActivePromotions();
+      if (!promos.length) {
+        el.innerHTML = '<div class="empty-state small"><p>No active promotions right now. Check back soon!</p></div>';
+        return;
+      }
+      el.innerHTML = promos.map(p => {
+        const bonus = p.bonus_type === 'fixed'
+          ? formatPHP(p.bonus_amount)
+          : `${p.bonus_percent}% bonus`;
+        return `<div class="card promo-card fade-in">
+          <div class="promo-badge">Active</div>
+          <h4>${escapeHtml(p.title)}</h4>
+          <p class="text-muted">${escapeHtml(p.description)}</p>
+          <div class="promo-bonus">${bonus}</div>
+          ${p.eligibility ? `<small class="text-muted">Eligibility: ${escapeHtml(p.eligibility)}</small>` : ''}
+          <small class="text-muted promo-dates">${formatDate(p.start_at)} — ${formatDate(p.end_at)}</small>
+        </div>`;
+      }).join('');
+    } catch {
+      el.innerHTML = '<div class="empty-state small"><p>Promotions unavailable</p></div>';
+    }
+  }
+
+  function promoStatusBadge(status) {
+    const map = { active: 'active', scheduled: 'pending', expired: 'expired', deactivated: 'disabled' };
+    return map[status] || 'pending';
+  }
+
+  function toLocalDatetime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
   async function renderNotifications(userId) {
@@ -415,6 +466,7 @@
 
   /* ========== ADMIN ========== */
   let adminCodeFilter = 'all';
+  let adminCodeTypeFilter = 'all';
 
   async function initAdmin() {
     const auth = await guardPage('admin');
@@ -422,19 +474,33 @@
     await refreshAdminUI();
     bindAdminTabs();
     bindAdminActions();
+    bindPromotionModal();
+    bindBalanceModal();
 
-    DB.subscribe(['profiles', 'withdrawals', 'earnings', 'activation_codes', 'notifications'], () => {
+    DB.subscribe(['profiles', 'withdrawals', 'earnings', 'activation_codes', 'notifications', 'promotions', 'balance_adjustments', 'admin_logs'], () => {
       refreshAdminUI();
     });
   }
 
   async function refreshAdminUI() {
-    await renderAdminStats();
-    await renderAdminCharts();
-    await renderAdminCodes(adminCodeFilter);
-    await renderAdminUsers($('#user-search')?.value || '');
-    await renderAdminWithdrawals();
-    await renderActivityFeed('#admin-activity', 12);
+    const tasks = [
+      renderAdminStats(),
+      renderAdminCharts(),
+      renderAdminPromotions(),
+      renderAdminCodes(adminCodeFilter, adminCodeTypeFilter),
+      renderAdminUsers($('#user-search')?.value || ''),
+      renderAdminAdjustments(),
+      renderAdminWithdrawals(),
+      renderAdminNotifications(),
+      renderAdminAuditLogs(),
+      renderActivityFeed('#admin-activity', 12)
+    ];
+    const results = await Promise.allSettled(tasks);
+    const failed = results.filter(r => r.status === 'rejected');
+    if (failed.length) {
+      console.error('Admin UI load errors:', failed.map(r => r.reason));
+      showToast('Some admin data failed to load. Check console.', 'warning');
+    }
   }
 
   async function renderAdminStats() {
@@ -501,23 +567,120 @@
     });
   }
 
-  async function renderAdminCodes(filter = 'all') {
+  async function renderAdminPromotions() {
+    const el = $('#promotions-table-body');
+    if (!el) return;
+    try {
+      const promos = await DB.adminGetPromotions();
+      if (!promos.length) {
+        el.innerHTML = '<tr><td colspan="6"><div class="empty-state small"><p>No promotions yet</p></div></td></tr>';
+        return;
+      }
+      el.innerHTML = promos.map(p => {
+        const bonus = p.bonus_type === 'fixed' ? formatPHP(p.bonus_amount) : `${p.bonus_percent}%`;
+        const status = p.computed_status || 'scheduled';
+        return `<tr>
+          <td><strong>${escapeHtml(p.title)}</strong><br><small class="text-muted">${escapeHtml(p.description).slice(0, 60)}</small></td>
+          <td>${bonus}</td>
+          <td><small>${formatDate(p.start_at)}<br>${formatDate(p.end_at)}</small></td>
+          <td><span class="badge badge-${promoStatusBadge(status)}">${status}</span></td>
+          <td><small>${p.eligibility ? escapeHtml(p.eligibility) : '—'}</small></td>
+          <td class="actions">
+            <button class="btn btn-sm btn-outline" data-edit-promo="${p.id}">Edit</button>
+            ${status === 'active' || status === 'scheduled' ? `<button class="btn btn-sm btn-warning" data-deactivate-promo="${p.id}">Deactivate</button>` : `<button class="btn btn-sm btn-success" data-activate-promo="${p.id}">Activate</button>`}
+            <button class="btn btn-sm btn-danger" data-delete-promo="${p.id}">Delete</button>
+          </td></tr>`;
+      }).join('');
+    } catch (err) {
+      el.innerHTML = `<tr><td colspan="6"><div class="empty-state small"><p>${escapeHtml(err.message)}</p></div></td></tr>`;
+    }
+  }
+
+  async function renderAdminCodes(filter = 'all', typeFilter = 'all') {
     const el = $('#codes-table-body');
     if (!el) return;
-    const codes = await DB.getActivationCodes(filter);
+    const codes = await DB.getActivationCodes(filter, typeFilter);
     if (!codes.length) {
-      el.innerHTML = '<tr><td colspan="5"><div class="empty-state small"><p>No codes found</p></div></td></tr>';
+      el.innerHTML = '<tr><td colspan="8"><div class="empty-state small"><p>No codes found</p></div></td></tr>';
       return;
     }
     el.innerHTML = codes.map(c => `<tr>
       <td><code>${escapeHtml(c.code_id)}</code></td>
+      <td><span class="badge badge-${c.code_type === 'free' ? 'pending' : 'active'}">${c.code_type || 'standard'}</span></td>
       <td>${formatDate(c.generated_at)}</td>
+      <td>${c.expires_at ? formatDate(c.expires_at) : '—'}</td>
+      <td>${c.use_count}/${c.max_uses}</td>
       <td><span class="badge badge-${c.status}">${c.status}</span></td>
-      <td>${c.user_assigned ? escapeHtml(c.user_assigned) : '—'}</td>
+      <td>${c.redeemed_by ? escapeHtml(c.redeemed_by) + (c.redeemed_at ? `<br><small>${formatDate(c.redeemed_at)}</small>` : '') : '—'}</td>
       <td class="actions">
         ${c.status === 'unused' ? `<button class="btn btn-sm btn-danger" data-disable-code="${escapeHtml(c.code_id)}">Disable</button>` : ''}
         <button class="btn btn-sm btn-outline" data-delete-code="${escapeHtml(c.code_id)}">Delete</button>
       </td></tr>`).join('');
+  }
+
+  async function renderAdminAdjustments() {
+    const el = $('#adjustments-table-body');
+    if (!el) return;
+    try {
+      const rows = await DB.adminGetBalanceAdjustments();
+      if (!rows.length) {
+        el.innerHTML = '<tr><td colspan="8"><div class="empty-state small"><p>No balance adjustments yet</p></div></td></tr>';
+        return;
+      }
+      el.innerHTML = rows.map(a => `<tr>
+        <td>${formatDate(a.created_at)}</td>
+        <td>${escapeHtml(a.username)}</td>
+        <td><span class="badge badge-${a.adjustment_type === 'add' ? 'approved' : 'rejected'}">${a.adjustment_type}</span></td>
+        <td>${formatPHP(a.amount)}</td>
+        <td>${formatPHP(a.previous_balance)}</td>
+        <td>${formatPHP(a.new_balance)}</td>
+        <td>${escapeHtml(a.admin_username)}</td>
+        <td><small>${escapeHtml(a.reason)}</small></td>
+      </tr>`).join('');
+    } catch (err) {
+      el.innerHTML = `<tr><td colspan="8"><div class="empty-state small"><p>${escapeHtml(err.message)}</p></div></td></tr>`;
+    }
+  }
+
+  async function renderAdminNotifications() {
+    const el = $('#notifications-table-body');
+    if (!el) return;
+    try {
+      const notes = await DB.adminGetAllNotifications();
+      if (!notes.length) {
+        el.innerHTML = '<tr><td colspan="5"><div class="empty-state small"><p>No notifications</p></div></td></tr>';
+        return;
+      }
+      el.innerHTML = notes.map(n => `<tr>
+        <td>${formatDate(n.created_at)}</td>
+        <td>${escapeHtml(n.username)}</td>
+        <td><span class="badge badge-${n.type === 'success' ? 'approved' : n.type === 'error' ? 'rejected' : 'pending'}">${n.type}</span></td>
+        <td><small>${escapeHtml(n.message)}</small></td>
+        <td>${n.read ? '✓' : '—'}</td>
+      </tr>`).join('');
+    } catch (err) {
+      el.innerHTML = `<tr><td colspan="5"><div class="empty-state small"><p>${escapeHtml(err.message)}</p></div></td></tr>`;
+    }
+  }
+
+  async function renderAdminAuditLogs() {
+    const el = $('#audit-table-body');
+    if (!el) return;
+    try {
+      const logs = await DB.adminGetAuditLogs();
+      if (!logs.length) {
+        el.innerHTML = '<tr><td colspan="4"><div class="empty-state small"><p>No audit logs</p></div></td></tr>';
+        return;
+      }
+      el.innerHTML = logs.map(l => `<tr>
+        <td>${formatDate(l.created_at)}</td>
+        <td><code>${escapeHtml(l.action)}</code></td>
+        <td>${escapeHtml(l.admin_username || '—')}</td>
+        <td><small>${escapeHtml(l.details || '—')}</small></td>
+      </tr>`).join('');
+    } catch (err) {
+      el.innerHTML = `<tr><td colspan="4"><div class="empty-state small"><p>${escapeHtml(err.message)}</p></div></td></tr>`;
+    }
   }
 
   async function renderAdminUsers(search = '') {
@@ -538,6 +701,7 @@
       <td><span class="badge badge-${u.status}">${u.status}</span></td>
       <td class="actions">
         <button class="btn btn-sm btn-outline" data-edit-user="${u.id}">Edit</button>
+        <button class="btn btn-sm btn-primary" data-adjust-balance="${u.id}">Balance</button>
         <button class="btn btn-sm ${u.status === 'banned' ? 'btn-success' : 'btn-warning'}" data-ban-user="${u.id}">${u.status === 'banned' ? 'Unban' : 'Ban'}</button>
         <button class="btn btn-sm btn-danger" data-delete-user="${u.id}">Delete</button>
       </td></tr>`).join('');
@@ -565,11 +729,94 @@
       </td></tr>`).join('');
   }
 
+  function bindPromotionModal() {
+    $('#new-promotion-btn')?.addEventListener('click', () => openPromotionModal());
+    $('#promo-bonus-type')?.addEventListener('change', e => {
+      const isFixed = e.target.value === 'fixed';
+      $('#promo-amount-group')?.classList.toggle('hidden', !isFixed);
+      $('#promo-percent-group')?.classList.toggle('hidden', isFixed);
+    });
+    $('#save-promotion-btn')?.addEventListener('click', savePromotion);
+  }
+
+  function openPromotionModal(promo = null) {
+    $('#promo-id').value = promo?.id || '';
+    $('#promotion-modal-title').textContent = promo ? 'Edit Promotion' : 'New Promotion';
+    $('#promo-title').value = promo?.title || '';
+    $('#promo-description').value = promo?.description || '';
+    $('#promo-start').value = promo ? toLocalDatetime(promo.start_at) : '';
+    $('#promo-end').value = promo ? toLocalDatetime(promo.end_at) : '';
+    $('#promo-bonus-type').value = promo?.bonus_type || 'fixed';
+    $('#promo-amount').value = promo?.bonus_amount || '';
+    $('#promo-percent').value = promo?.bonus_percent || '';
+    $('#promo-eligibility').value = promo?.eligibility || '';
+    $('#promo-active').checked = promo ? promo.is_active !== false : true;
+    $('#promo-amount-group')?.classList.toggle('hidden', promo?.bonus_type === 'percentage');
+    $('#promo-percent-group')?.classList.toggle('hidden', !promo || promo.bonus_type !== 'percentage');
+    $('#promotion-modal')?.classList.add('open');
+  }
+
+  async function savePromotion() {
+    const bonusType = $('#promo-bonus-type')?.value;
+    const promo = {
+      id: $('#promo-id')?.value || null,
+      title: $('#promo-title')?.value.trim(),
+      description: $('#promo-description')?.value.trim(),
+      start_at: new Date($('#promo-start')?.value).toISOString(),
+      end_at: new Date($('#promo-end')?.value).toISOString(),
+      bonus_type: bonusType,
+      bonus_amount: bonusType === 'fixed' ? parseFloat($('#promo-amount')?.value) : null,
+      bonus_percent: bonusType === 'percentage' ? parseFloat($('#promo-percent')?.value) : null,
+      eligibility: $('#promo-eligibility')?.value.trim(),
+      is_active: $('#promo-active')?.checked
+    };
+    if (!promo.title || !promo.description) return showToast('Title and description required', 'error');
+    try {
+      await DB.adminSavePromotion(promo);
+      $('#promotion-modal')?.classList.remove('open');
+      showToast('Promotion saved', 'success');
+      await renderAdminPromotions();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  function bindBalanceModal() {
+    $('#save-balance-btn')?.addEventListener('click', saveBalanceAdjustment);
+  }
+
+  async function openBalanceModal(userId) {
+    const users = await DB.getAllUsers();
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
+    $('#balance-user-id').value = user.id;
+    $('#balance-user-info').textContent = `${user.name} (@${user.username}) — Current: ${formatPHP(user.earnings + user.referralEarnings)}`;
+    $('#balance-amount').value = '';
+    $('#balance-reason').value = '';
+    $('#balance-type').value = 'add';
+    $('#balance-allow-negative').checked = false;
+    $('#balance-modal')?.classList.add('open');
+  }
+
+  async function saveBalanceAdjustment() {
+    const userId = $('#balance-user-id')?.value;
+    const amount = parseFloat($('#balance-amount')?.value);
+    const reason = $('#balance-reason')?.value.trim();
+    const type = $('#balance-type')?.value;
+    const allowNegative = $('#balance-allow-negative')?.checked;
+    if (!amount || amount <= 0) return showToast('Enter a valid amount', 'error');
+    if (!reason) return showToast('Reason is required', 'error');
+    try {
+      await DB.adminAdjustBalance(userId, amount, type, reason, allowNegative);
+      $('#balance-modal')?.classList.remove('open');
+      showToast('Balance adjusted — user notified', 'success');
+      await refreshAdminUI();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
   function bindAdminActions() {
     $('#generate-code-btn')?.addEventListener('click', async () => {
       try {
-        await DB.adminGenerateCodes(1);
-        showToast('Code generated', 'success');
+        await DB.adminGenerateCodes(1, 'standard');
+        showToast('Standard code generated', 'success');
         await refreshAdminUI();
       } catch (err) { showToast(err.message, 'error'); }
     });
@@ -577,8 +824,20 @@
     $('#generate-multi-btn')?.addEventListener('click', async () => {
       const count = parseInt($('#code-count')?.value || '5', 10);
       try {
-        await DB.adminGenerateCodes(count);
-        showToast(`${Math.min(count, 50)} codes generated`, 'success');
+        await DB.adminGenerateCodes(count, 'standard');
+        showToast(`${Math.min(count, 50)} standard codes generated`, 'success');
+        await refreshAdminUI();
+      } catch (err) { showToast(err.message, 'error'); }
+    });
+
+    $('#generate-free-btn')?.addEventListener('click', async () => {
+      const count = parseInt($('#free-code-count')?.value || '5', 10);
+      const expiry = $('#free-code-expiry')?.value;
+      const maxUses = parseInt($('#free-code-max-uses')?.value || '1', 10);
+      const expiresAt = expiry ? new Date(expiry).toISOString() : null;
+      try {
+        await DB.adminGenerateCodes(count, 'free', expiresAt, maxUses);
+        showToast(`${Math.min(count, 50)} free codes generated (no referral reward)`, 'success');
         await refreshAdminUI();
       } catch (err) { showToast(err.message, 'error'); }
     });
@@ -588,7 +847,16 @@
         $$('[data-code-filter]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         adminCodeFilter = btn.dataset.codeFilter;
-        renderAdminCodes(adminCodeFilter);
+        renderAdminCodes(adminCodeFilter, adminCodeTypeFilter);
+      });
+    });
+
+    $$('[data-code-type-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        $$('[data-code-type-filter]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        adminCodeTypeFilter = btn.dataset.codeTypeFilter;
+        renderAdminCodes(adminCodeFilter, adminCodeTypeFilter);
       });
     });
 
@@ -619,6 +887,30 @@
       }
       const edit = e.target.closest('[data-edit-user]');
       if (edit) openEditUserModal(edit.dataset.editUser);
+      const adjust = e.target.closest('[data-adjust-balance]');
+      if (adjust) openBalanceModal(adjust.dataset.adjustBalance);
+      const editPromo = e.target.closest('[data-edit-promo]');
+      if (editPromo) {
+        const promos = await DB.adminGetPromotions();
+        const promo = promos.find(p => p.id === editPromo.dataset.editPromo);
+        if (promo) openPromotionModal(promo);
+      }
+      const delPromo = e.target.closest('[data-delete-promo]');
+      if (delPromo) {
+        if (!confirm('Delete this promotion?')) return;
+        try { await DB.adminDeletePromotion(delPromo.dataset.deletePromo); showToast('Promotion deleted', 'info'); await renderAdminPromotions(); }
+        catch (err) { showToast(err.message, 'error'); }
+      }
+      const actPromo = e.target.closest('[data-activate-promo]');
+      if (actPromo) {
+        try { await DB.adminTogglePromotion(actPromo.dataset.activatePromo, true); showToast('Promotion activated', 'success'); await renderAdminPromotions(); }
+        catch (err) { showToast(err.message, 'error'); }
+      }
+      const deactPromo = e.target.closest('[data-deactivate-promo]');
+      if (deactPromo) {
+        try { await DB.adminTogglePromotion(deactPromo.dataset.deactivatePromo, false); showToast('Promotion deactivated', 'info'); await renderAdminPromotions(); }
+        catch (err) { showToast(err.message, 'error'); }
+      }
       const appr = e.target.closest('[data-approve-wd]');
       if (appr) {
         try { await DB.adminProcessWithdrawal(appr.dataset.approveWd, 'approved'); showToast('Withdrawal approved', 'success'); await refreshAdminUI(); }
@@ -685,35 +977,39 @@
     try {
       await DB.init();
     } catch (err) {
-      showLoader(false);
       showToast(err.message, 'error');
       return;
+    } finally {
+      showLoader(false);
     }
-    showLoader(false);
 
     const page = document.body.dataset.page;
     bindLogout();
     bindEditModal();
     initMobileNav();
 
-    const session = await DB.getSession();
-    const profile = DB.getProfile();
+    const session = await DB.getSession().catch(() => null);
+    const profile = DB.getProfile() || (session ? await DB.ensureProfile().catch(() => null) : null);
 
-    switch (page) {
-      case 'index':
-        if (session && profile) window.location.href = profile.role === 'admin' ? 'admin.html' : 'dashboard.html';
-        break;
-      case 'login':
-        if (session && profile) window.location.href = profile.role === 'admin' ? 'admin.html' : 'dashboard.html';
-        else $('#login-form')?.addEventListener('submit', handleLogin);
-        break;
-      case 'register':
-        $('#register-form')?.addEventListener('submit', handleRegister);
-        break;
-      case 'dashboard': await renderDashboard(); break;
-      case 'game': await initGame(); break;
-      case 'withdrawal': await initWithdrawal(); break;
-      case 'admin': await initAdmin(); break;
+    try {
+      switch (page) {
+        case 'index':
+          if (session && profile) window.location.replace(profile.role === 'admin' ? 'admin.html' : 'dashboard.html');
+          break;
+        case 'login':
+          if (session && profile) window.location.replace(profile.role === 'admin' ? 'admin.html' : 'dashboard.html');
+          else $('#login-form')?.addEventListener('submit', handleLogin);
+          break;
+        case 'register':
+          $('#register-form')?.addEventListener('submit', handleRegister);
+          break;
+        case 'dashboard': await renderDashboard(); break;
+        case 'game': await initGame(); break;
+        case 'withdrawal': await initWithdrawal(); break;
+        case 'admin': await initAdmin(); break;
+      }
+    } catch (err) {
+      showToast(err.message || 'Failed to load page', 'error');
     }
   }
 
