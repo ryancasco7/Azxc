@@ -44,6 +44,7 @@
     <div class="admin-tabs">
       <button class="admin-tab active" data-panel="promotions">Promotions</button>
       <button class="admin-tab" data-panel="codes">Activation Codes</button>
+      <button class="admin-tab" data-panel="resellers">Resellers</button>
       <button class="admin-tab" data-panel="users">Users</button>
       <button class="admin-tab" data-panel="adjustments">Balance Adjustments</button>
       <button class="admin-tab" data-panel="withdrawals">Withdrawals</button>
@@ -67,17 +68,14 @@
     <div id="panel-codes" class="admin-panel">
       <div class="admin-toolbar admin-toolbar-wrap">
         <div class="toolbar-group">
-          <span class="toolbar-label">Standard</span>
-          <button id="generate-code-btn" class="btn btn-primary btn-sm">Generate 1</button>
-          <input type="number" id="code-count" value="5" min="1" max="50" style="width:70px;">
-          <button id="generate-multi-btn" class="btn btn-outline btn-sm">Generate Bulk</button>
+          <button id="create-code-btn" class="btn btn-primary btn-sm">+ Create Activation Code</button>
+          <button id="generate-random-free-btn" class="btn btn-outline btn-sm" title="Generate random free codes (no referral reward)">Generate Random Free</button>
         </div>
         <div class="toolbar-group">
-          <span class="toolbar-label">Free (no referral reward)</span>
-          <button id="generate-free-btn" class="btn btn-primary btn-sm">Generate Free</button>
-          <input type="number" id="free-code-count" value="5" min="1" max="50" style="width:70px;">
-          <input type="datetime-local" id="free-code-expiry" title="Expiration (optional)">
-          <input type="number" id="free-code-max-uses" value="1" min="1" max="100" style="width:60px;" title="Max uses">
+          <span class="toolbar-label">Standard bulk</span>
+          <button id="generate-code-btn" class="btn btn-outline btn-sm">Generate 1</button>
+          <input type="number" id="code-count" value="5" min="1" max="50" style="width:70px;">
+          <button id="generate-multi-btn" class="btn btn-outline btn-sm">Generate Bulk</button>
         </div>
         <div class="filter-pills">
           <button class="active" data-code-type-filter="all">All Types</button>
@@ -86,15 +84,29 @@
         </div>
         <div class="filter-pills">
           <button class="active" data-code-filter="all">All Status</button>
-          <button data-code-filter="unused">Unused</button>
-          <button data-code-filter="used">Used</button>
+          <button data-code-filter="active">Active</button>
+          <button data-code-filter="inactive">Inactive</button>
+          <button data-code-filter="exhausted">Exhausted</button>
           <button data-code-filter="expired">Expired</button>
         </div>
       </div>
       <div class="card table-wrap">
         <table class="data-table">
-          <thead><tr><th>Code</th><th>Type</th><th>Generated</th><th>Expires</th><th>Uses</th><th>Status</th><th>Redeemed By</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Code</th><th>Max Uses</th><th>Used</th><th>Remaining</th><th>Status</th><th>Created</th><th>Expires</th><th>Type</th><th>Actions</th></tr></thead>
           <tbody id="codes-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="panel-resellers" class="admin-panel">
+      <div class="admin-toolbar admin-toolbar-wrap">
+        <button id="new-reseller-btn" class="btn btn-primary btn-sm">+ Add Reseller</button>
+        <input type="search" id="reseller-search" placeholder="Search resellers...">
+      </div>
+      <div class="card table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Name</th><th>Contact</th><th>Assigned</th><th>Used</th><th>Available</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="resellers-table-body"></tbody>
         </table>
       </div>
     </div>
@@ -206,6 +218,133 @@
     </div>
   </div>
 
+  <div id="activation-code-modal" class="modal">
+    <div class="modal-content modal-lg">
+      <div class="modal-header">
+        <h3 id="activation-code-modal-title">Create Activation Code</h3>
+        <button class="btn-icon" data-close-modal>✕</button>
+      </div>
+      <input type="hidden" id="code-edit-id">
+      <div class="form-group">
+        <label for="code-value">Activation Code</label>
+        <input type="text" id="code-value" placeholder="e.g. FREE100" maxlength="50" style="text-transform:uppercase;" required>
+        <small class="text-muted">3–50 characters. Users enter this code during registration.</small>
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="code-max-uses">Maximum Uses</label>
+          <input type="number" id="code-max-uses" value="100" min="1" max="10000" required>
+          <small class="text-muted">How many accounts can register with this code.</small>
+        </div>
+        <div class="form-group">
+          <label for="code-expires">Expiration Date (optional)</label>
+          <input type="datetime-local" id="code-expires">
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="code-type">Code Type</label>
+          <select id="code-type">
+            <option value="free">Free (no referral reward)</option>
+            <option value="standard">Standard (₱159, referral reward applies)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="code-status">Status</label>
+          <select id="code-status">
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </div>
+      </div>
+      <div id="code-usage-info" class="text-muted mb-1 hidden"></div>
+      <button id="save-activation-code-btn" class="btn btn-primary btn-block mt-1">Save Code</button>
+    </div>
+  </div>
+
+  <div id="reseller-modal" class="modal">
+    <div class="modal-content modal-lg">
+      <div class="modal-header">
+        <h3 id="reseller-modal-title">Add Reseller</h3>
+        <button class="btn-icon" data-close-modal>✕</button>
+      </div>
+      <input type="hidden" id="reseller-id">
+      <div class="form-group">
+        <label for="reseller-name">Full Name</label>
+        <input type="text" id="reseller-name" required>
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="reseller-facebook">Facebook Profile/Page Link</label>
+          <input type="text" id="reseller-facebook" placeholder="facebook.com/username" required>
+        </div>
+        <div class="form-group">
+          <label for="reseller-contact">Contact Number</label>
+          <input type="tel" id="reseller-contact" placeholder="09XXXXXXXXX" required>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="reseller-location">Location (optional)</label>
+          <input type="text" id="reseller-location">
+        </div>
+        <div class="form-group">
+          <label for="reseller-photo">Profile Picture URL (optional)</label>
+          <input type="url" id="reseller-photo" placeholder="https://...">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="reseller-notes">Notes (optional)</label>
+        <textarea id="reseller-notes" rows="2"></textarea>
+      </div>
+      <div class="form-group">
+        <label for="reseller-status">Status</label>
+        <select id="reseller-status">
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+      </div>
+      <button id="save-reseller-btn" class="btn btn-primary btn-block mt-1">Save Reseller</button>
+    </div>
+  </div>
+
+  <div id="reseller-codes-modal" class="modal">
+    <div class="modal-content modal-lg">
+      <div class="modal-header">
+        <h3 id="reseller-codes-title">Manage Code Allocation</h3>
+        <button class="btn-icon" data-close-modal>✕</button>
+      </div>
+      <input type="hidden" id="reseller-codes-id">
+      <div id="reseller-codes-stats" class="stat-grid mb-2"></div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="reseller-code-action">Action</label>
+          <select id="reseller-code-action">
+            <option value="assign_add">Add Codes to Inventory</option>
+            <option value="assign_reduce">Reduce Assigned Codes</option>
+            <option value="mark_sold">Mark Codes as Sold/Used</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="reseller-code-amount">Amount</label>
+          <input type="number" id="reseller-code-amount" min="1" value="1">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="reseller-code-notes">Notes (optional)</label>
+        <input type="text" id="reseller-code-notes" placeholder="Reason or reference">
+      </div>
+      <button id="save-reseller-codes-btn" class="btn btn-primary btn-block mb-2">Apply</button>
+      <div class="section-title">Allocation History</div>
+      <div class="card table-wrap" style="max-height:240px;overflow:auto;">
+        <table class="data-table">
+          <thead><tr><th>Date</th><th>Action</th><th>Amount</th><th>Assigned</th><th>Used</th><th>Admin</th><th>Notes</th></tr></thead>
+          <tbody id="reseller-history-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div id="edit-user-modal" class="modal">
     <div class="modal-content">
       <div class="modal-header">
@@ -230,7 +369,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/db.js?v=5"></script>
-  <script src="js/app.js?v=5"></script>
+  <script src="js/db.js?v=8"></script>
+  <script src="js/app.js?v=8"></script>
 </body>
 </html>

@@ -65,6 +65,22 @@
     return d.innerHTML;
   }
 
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    }
+  }
+
   function downloadCSV(filename, rows) {
     if (!rows.length) return showToast('No data to export', 'warning');
     const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -120,22 +136,22 @@
       let a, b, answer;
 
       if (op === '÷') {
-        b = randDigits(2, 3);
-        answer = randDigits(2, 4);
+        b = randDigits(2, 5);
+        answer = randDigits(2, 5);
         a = b * answer;
-        if (String(a).length < 4 || String(a).length > 6) continue;
+        if (String(a).length < 2 || String(a).length > 5) continue;
       } else if (op === '×') {
-        a = randDigits(4, 6);
-        b = randDigits(2, 3);
+        a = randDigits(2, 5);
+        b = randDigits(2, 5);
         answer = a * b;
       } else if (op === '-') {
-        a = randDigits(4, 6);
-        b = randDigits(4, 6);
+        a = randDigits(2, 5);
+        b = randDigits(2, 5);
         if (b > a) [a, b] = [b, a];
         answer = a - b;
       } else {
-        a = randDigits(4, 6);
-        b = randDigits(4, 6);
+        a = randDigits(2, 5);
+        b = randDigits(2, 5);
         answer = a + b;
       }
 
@@ -145,7 +161,7 @@
       await DB.saveQuestionKey(userId, key);
       return { a, b, op, answer, key, display: `${a.toLocaleString()} ${op} ${b.toLocaleString()} = ?` };
     }
-    return { a: 1234, b: 5678, op: '+', answer: 6912, key: 'fallback', display: '1234 + 5678 = ?' };
+    return { a: 482, b: 157, op: '+', answer: 639, key: 'fallback', display: '482 + 157 = ?' };
   }
 
   /* ========== AUTH ========== */
@@ -292,6 +308,33 @@
     const d = new Date(iso);
     const pad = n => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function formatFacebookUrl(link) {
+    if (!link) return '#';
+    const trimmed = link.trim();
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    if (trimmed.startsWith('//')) return 'https:' + trimmed;
+    if (/^(facebook|fb)\.com/i.test(trimmed) || trimmed.includes('facebook.com') || trimmed.includes('fb.com')) {
+      return 'https://' + trimmed.replace(/^\/\//, '');
+    }
+    return 'https://facebook.com/' + trimmed.replace(/^@/, '');
+  }
+
+  function formatFacebookDisplay(link) {
+    return link.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '');
+  }
+
+  function resellerInitials(name) {
+    return (name || '?').split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
+  }
+
+  function resellerAvatarHtml(reseller, size = 'md') {
+    const cls = size === 'lg' ? 'reseller-avatar-lg' : 'reseller-avatar';
+    if (reseller.profile_picture_url) {
+      return `<img class="${cls}" src="${escapeHtml(reseller.profile_picture_url)}" alt="${escapeHtml(reseller.full_name)}">`;
+    }
+    return `<div class="${cls} reseller-avatar-fallback">${escapeHtml(resellerInitials(reseller.full_name))}</div>`;
   }
 
   async function renderNotifications(userId) {
@@ -476,8 +519,10 @@
     bindAdminActions();
     bindPromotionModal();
     bindBalanceModal();
+    bindActivationCodeModal();
+    bindResellerModals();
 
-    DB.subscribe(['profiles', 'withdrawals', 'earnings', 'activation_codes', 'notifications', 'promotions', 'balance_adjustments', 'admin_logs'], () => {
+    DB.subscribe(['profiles', 'withdrawals', 'earnings', 'activation_codes', 'notifications', 'promotions', 'balance_adjustments', 'admin_logs', 'resellers'], () => {
       refreshAdminUI();
     });
   }
@@ -488,6 +533,7 @@
       renderAdminCharts(),
       renderAdminPromotions(),
       renderAdminCodes(adminCodeFilter, adminCodeTypeFilter),
+      renderAdminResellers($('#reseller-search')?.value || ''),
       renderAdminUsers($('#user-search')?.value || ''),
       renderAdminAdjustments(),
       renderAdminWithdrawals(),
@@ -601,21 +647,248 @@
     if (!el) return;
     const codes = await DB.getActivationCodes(filter, typeFilter);
     if (!codes.length) {
-      el.innerHTML = '<tr><td colspan="8"><div class="empty-state small"><p>No codes found</p></div></td></tr>';
+      el.innerHTML = '<tr><td colspan="9"><div class="empty-state small"><p>No codes found</p></div></td></tr>';
       return;
     }
-    el.innerHTML = codes.map(c => `<tr>
-      <td><code>${escapeHtml(c.code_id)}</code></td>
-      <td><span class="badge badge-${c.code_type === 'free' ? 'pending' : 'active'}">${c.code_type || 'standard'}</span></td>
+    el.innerHTML = codes.map(c => {
+      const meta = DB.computeCodeMeta(c);
+      const badgeClass = meta.displayStatus === 'Active' ? 'active'
+        : meta.displayStatus === 'Inactive' ? 'disabled'
+        : meta.displayStatus === 'Exhausted' ? 'used' : 'expired';
+      return `<tr>
+      <td class="code-copy-cell">
+        <code>${escapeHtml(c.code_id)}</code>
+        <button type="button" class="btn-copy-code" data-copy-code="${escapeHtml(c.code_id)}" title="Copy code">📋</button>
+      </td>
+      <td>${meta.maxUses}</td>
+      <td>${meta.useCount}</td>
+      <td>${meta.remaining}</td>
+      <td><span class="badge badge-${badgeClass}">${meta.displayStatus}</span></td>
       <td>${formatDate(c.generated_at)}</td>
       <td>${c.expires_at ? formatDate(c.expires_at) : '—'}</td>
-      <td>${c.use_count}/${c.max_uses}</td>
-      <td><span class="badge badge-${c.status}">${c.status}</span></td>
-      <td>${c.redeemed_by ? escapeHtml(c.redeemed_by) + (c.redeemed_at ? `<br><small>${formatDate(c.redeemed_at)}</small>` : '') : '—'}</td>
+      <td><span class="badge badge-${c.code_type === 'free' ? 'pending' : 'active'}">${c.code_type || 'standard'}</span></td>
       <td class="actions">
-        ${c.status === 'unused' ? `<button class="btn btn-sm btn-danger" data-disable-code="${escapeHtml(c.code_id)}">Disable</button>` : ''}
-        <button class="btn btn-sm btn-outline" data-delete-code="${escapeHtml(c.code_id)}">Delete</button>
-      </td></tr>`).join('');
+        ${meta.canEdit ? `<button class="btn btn-sm btn-outline" data-edit-code="${escapeHtml(c.code_id)}">Edit</button>` : ''}
+        ${meta.canDeactivate ? `<button class="btn btn-sm btn-warning" data-disable-code="${escapeHtml(c.code_id)}">Deactivate</button>` : ''}
+        ${meta.canActivate ? `<button class="btn btn-sm btn-success" data-activate-code="${escapeHtml(c.code_id)}">Activate</button>` : ''}
+        <button class="btn btn-sm btn-danger" data-delete-code="${escapeHtml(c.code_id)}">Delete</button>
+      </td></tr>`;
+    }).join('');
+  }
+
+  async function renderAdminResellers(search = '') {
+    const el = $('#resellers-table-body');
+    if (!el) return;
+    try {
+      let resellers = await DB.adminGetResellers();
+      if (search) {
+        const s = search.toLowerCase();
+        resellers = resellers.filter(r =>
+          r.full_name.toLowerCase().includes(s) ||
+          r.contact_number.includes(s) ||
+          (r.location || '').toLowerCase().includes(s)
+        );
+      }
+      if (!resellers.length) {
+        el.innerHTML = '<tr><td colspan="7"><div class="empty-state small"><p>No resellers found</p></div></td></tr>';
+        return;
+      }
+      el.innerHTML = resellers.map(r => {
+        const available = r.codes_available ?? (r.codes_assigned - r.codes_used);
+        const statusBadge = !r.is_active ? 'disabled' : available <= 0 ? 'expired' : 'active';
+        const statusLabel = !r.is_active ? 'Inactive' : available <= 0 ? 'Out of Stock' : 'Active';
+        return `<tr>
+          <td>
+            <strong>${escapeHtml(r.full_name)}</strong>
+            ${r.location ? `<br><small class="text-muted">${escapeHtml(r.location)}</small>` : ''}
+          </td>
+          <td>${escapeHtml(r.contact_number)}<br><small><a href="${escapeHtml(formatFacebookUrl(r.facebook_link))}" target="_blank" rel="noopener">${escapeHtml(formatFacebookDisplay(r.facebook_link))}</a></small></td>
+          <td>${r.codes_assigned}</td>
+          <td>${r.codes_used}</td>
+          <td><strong>${available}</strong></td>
+          <td><span class="badge badge-${statusBadge}">${statusLabel}</span></td>
+          <td class="actions">
+            <button class="btn btn-sm btn-outline" data-edit-reseller="${r.id}">Edit</button>
+            <button class="btn btn-sm btn-primary" data-manage-reseller-codes="${r.id}">Codes</button>
+            ${r.is_active
+              ? `<button class="btn btn-sm btn-warning" data-deactivate-reseller="${r.id}">Deactivate</button>`
+              : `<button class="btn btn-sm btn-success" data-activate-reseller="${r.id}">Activate</button>`}
+            <button class="btn btn-sm btn-danger" data-delete-reseller="${r.id}">Delete</button>
+          </td>
+        </tr>`;
+      }).join('');
+    } catch (err) {
+      el.innerHTML = `<tr><td colspan="7"><div class="empty-state small"><p>${escapeHtml(err.message)}</p></div></td></tr>`;
+    }
+  }
+
+  function bindResellerModals() {
+    $('#new-reseller-btn')?.addEventListener('click', () => openResellerModal());
+    $('#save-reseller-btn')?.addEventListener('click', saveReseller);
+    $('#save-reseller-codes-btn')?.addEventListener('click', saveResellerCodes);
+    $('#reseller-search')?.addEventListener('input', e => renderAdminResellers(e.target.value));
+  }
+
+  function openResellerModal(reseller = null) {
+    $('#reseller-id').value = reseller?.id || '';
+    $('#reseller-modal-title').textContent = reseller ? 'Edit Reseller' : 'Add Reseller';
+    $('#reseller-name').value = reseller?.full_name || '';
+    $('#reseller-facebook').value = reseller?.facebook_link || '';
+    $('#reseller-contact').value = reseller?.contact_number || '';
+    $('#reseller-location').value = reseller?.location || '';
+    $('#reseller-photo').value = reseller?.profile_picture_url || '';
+    $('#reseller-notes').value = reseller?.notes || '';
+    $('#reseller-status').value = reseller?.is_active === false ? 'inactive' : 'active';
+    $('#reseller-modal')?.classList.add('open');
+  }
+
+  async function saveReseller() {
+    const reseller = {
+      id: $('#reseller-id')?.value || null,
+      full_name: $('#reseller-name')?.value.trim(),
+      facebook_link: $('#reseller-facebook')?.value.trim(),
+      contact_number: $('#reseller-contact')?.value.trim(),
+      location: $('#reseller-location')?.value.trim(),
+      profile_picture_url: $('#reseller-photo')?.value.trim(),
+      notes: $('#reseller-notes')?.value.trim(),
+      is_active: $('#reseller-status')?.value === 'active'
+    };
+    if (!reseller.full_name || !reseller.facebook_link || !reseller.contact_number) {
+      return showToast('Name, Facebook link, and contact number are required', 'error');
+    }
+    try {
+      await DB.adminSaveReseller(reseller);
+      $('#reseller-modal')?.classList.remove('open');
+      showToast('Reseller saved', 'success');
+      await renderAdminResellers($('#reseller-search')?.value || '');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function openResellerCodesModal(resellerId) {
+    const resellers = await DB.adminGetResellers();
+    const r = resellers.find(x => x.id === resellerId);
+    if (!r) return;
+    const available = r.codes_available ?? (r.codes_assigned - r.codes_used);
+    $('#reseller-codes-id').value = r.id;
+    $('#reseller-codes-title').textContent = `Code Allocation — ${r.full_name}`;
+    $('#reseller-codes-stats').innerHTML = `
+      <div class="card stat-card"><div class="card-title">Assigned</div><div class="card-value">${r.codes_assigned}</div></div>
+      <div class="card stat-card"><div class="card-title">Used</div><div class="card-value">${r.codes_used}</div></div>
+      <div class="card stat-card"><div class="card-title">Available</div><div class="card-value">${available}</div></div>`;
+    $('#reseller-code-amount').value = '1';
+    $('#reseller-code-notes').value = '';
+    $('#reseller-code-action').value = 'assign_add';
+    await renderResellerHistory(r.id);
+    $('#reseller-codes-modal')?.classList.add('open');
+  }
+
+  async function renderResellerHistory(resellerId) {
+    const el = $('#reseller-history-body');
+    if (!el) return;
+    try {
+      const history = await DB.adminGetResellerHistory(resellerId);
+      if (!history.length) {
+        el.innerHTML = '<tr><td colspan="7"><div class="empty-state small"><p>No allocation history yet</p></div></td></tr>';
+        return;
+      }
+      const actionLabels = { assign_add: 'Add', assign_reduce: 'Reduce', mark_sold: 'Sold' };
+      el.innerHTML = history.map(h => `<tr>
+        <td>${formatDate(h.created_at)}</td>
+        <td>${actionLabels[h.action_type] || h.action_type}</td>
+        <td>${h.amount}</td>
+        <td>${h.assigned_before} → ${h.assigned_after}</td>
+        <td>${h.used_before} → ${h.used_after}</td>
+        <td>${escapeHtml(h.admin_username)}</td>
+        <td><small>${escapeHtml(h.notes || '—')}</small></td>
+      </tr>`).join('');
+    } catch (err) {
+      el.innerHTML = `<tr><td colspan="7"><div class="empty-state small"><p>${escapeHtml(err.message)}</p></div></td></tr>`;
+    }
+  }
+
+  async function saveResellerCodes() {
+    const resellerId = $('#reseller-codes-id')?.value;
+    const actionType = $('#reseller-code-action')?.value;
+    const amount = parseInt($('#reseller-code-amount')?.value || '0', 10);
+    const notes = $('#reseller-code-notes')?.value.trim();
+    if (!amount || amount < 1) return showToast('Enter a valid amount', 'error');
+    try {
+      await DB.adminAdjustResellerCodes(resellerId, actionType, amount, notes || null);
+      showToast('Code allocation updated', 'success');
+      await openResellerCodesModal(resellerId);
+      await renderAdminResellers($('#reseller-search')?.value || '');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  let userResellersCache = [];
+
+  async function initResellersPage() {
+    const auth = await guardPage('user');
+    if (!auth) return;
+
+    const render = () => renderUserResellers(
+      $('#reseller-user-search')?.value || '',
+      $('#reseller-user-sort')?.value || 'available-desc'
+    );
+
+    $('#reseller-user-search')?.addEventListener('input', render);
+    $('#reseller-user-sort')?.addEventListener('change', render);
+
+    await render();
+    DB.subscribe(['resellers'], render);
+  }
+
+  async function renderUserResellers(search = '', sort = 'available-desc') {
+    const el = $('#resellers-list');
+    if (!el) return;
+    try {
+      userResellersCache = await DB.getActiveResellers();
+      let list = [...userResellersCache];
+
+      if (search) {
+        const s = search.toLowerCase();
+        list = list.filter(r => r.full_name.toLowerCase().includes(s));
+      }
+
+      list.sort((a, b) => {
+        const avA = a.codes_available ?? (a.codes_assigned - a.codes_used);
+        const avB = b.codes_available ?? (b.codes_assigned - b.codes_used);
+        if (sort === 'available-desc') return avB - avA;
+        if (sort === 'available-asc') return avA - avB;
+        return a.full_name.localeCompare(b.full_name);
+      });
+
+      if (!list.length) {
+        el.innerHTML = '<div class="empty-state"><div class="empty-icon">🏪</div><p>No authorized resellers found</p></div>';
+        return;
+      }
+
+      el.innerHTML = list.map(r => {
+        const available = r.codes_available ?? (r.codes_assigned - r.codes_used);
+        const outOfStock = available <= 0;
+        const fbUrl = formatFacebookUrl(r.facebook_link);
+        return `<div class="card reseller-card fade-in ${outOfStock ? 'reseller-out-of-stock' : ''}">
+          <div class="reseller-card-header">
+            ${resellerAvatarHtml(r, 'lg')}
+            <div>
+              <span class="reseller-verified">✅ Verified Reseller</span>
+              <h3>${escapeHtml(r.full_name)}</h3>
+              ${r.location ? `<p class="text-muted">${escapeHtml(r.location)}</p>` : ''}
+            </div>
+          </div>
+          <div class="reseller-card-body">
+            <p><strong>Facebook:</strong> <a href="${escapeHtml(fbUrl)}" target="_blank" rel="noopener">${escapeHtml(formatFacebookDisplay(r.facebook_link))}</a></p>
+            <p><strong>Contact:</strong> <a href="tel:${escapeHtml(r.contact_number)}">${escapeHtml(r.contact_number)}</a></p>
+            <p class="reseller-stock ${outOfStock ? 'out-of-stock' : 'in-stock'}">
+              <strong>Available Codes:</strong> ${outOfStock ? 'Out of Stock' : available}
+            </p>
+            <span class="badge badge-${outOfStock ? 'expired' : 'active'}">${outOfStock ? 'Out of Stock' : 'Available'}</span>
+          </div>
+        </div>`;
+      }).join('');
+    } catch (err) {
+      el.innerHTML = `<div class="empty-state"><p>${escapeHtml(err.message)}</p></div>`;
+    }
   }
 
   async function renderAdminAdjustments() {
@@ -779,6 +1052,68 @@
     } catch (err) { showToast(err.message, 'error'); }
   }
 
+  function bindActivationCodeModal() {
+    $('#create-code-btn')?.addEventListener('click', () => openActivationCodeModal());
+    $('#save-activation-code-btn')?.addEventListener('click', saveActivationCode);
+    $('#code-value')?.addEventListener('input', e => { e.target.value = e.target.value.toUpperCase(); });
+  }
+
+  function openActivationCodeModal(code = null) {
+    const isEdit = Boolean(code);
+    $('#code-edit-id').value = code?.code_id || '';
+    $('#activation-code-modal-title').textContent = isEdit ? 'Edit Activation Code' : 'Create Activation Code';
+    $('#code-value').value = code?.code_id || '';
+    $('#code-value').disabled = isEdit;
+    $('#code-max-uses').value = code?.max_uses ?? 100;
+    $('#code-expires').value = code?.expires_at ? toLocalDatetime(code.expires_at) : '';
+    $('#code-type').value = code?.code_type || 'free';
+    $('#code-type').disabled = isEdit;
+    const meta = code ? DB.computeCodeMeta(code) : null;
+    $('#code-status').value = meta?.disabled ? 'inactive' : 'active';
+    const usageInfo = $('#code-usage-info');
+    if (isEdit && code) {
+      usageInfo.textContent = `Currently used ${code.use_count ?? 0} of ${code.max_uses ?? 1} times. Max uses cannot be set below ${code.use_count ?? 0}.`;
+      usageInfo.classList.remove('hidden');
+      $('#code-max-uses').min = code.use_count ?? 0;
+    } else {
+      usageInfo.classList.add('hidden');
+      $('#code-max-uses').min = 1;
+    }
+    $('#activation-code-modal')?.classList.add('open');
+  }
+
+  async function saveActivationCode() {
+    const editId = $('#code-edit-id')?.value;
+    const codeValue = ($('#code-value')?.value || '').trim().toUpperCase();
+    const maxUses = parseInt($('#code-max-uses')?.value || '1', 10);
+    const expiry = $('#code-expires')?.value;
+    const codeType = $('#code-type')?.value || 'free';
+    const isActive = $('#code-status')?.value === 'active';
+    const expiresAt = expiry ? new Date(expiry).toISOString() : null;
+
+    if (!editId && (!codeValue || codeValue.length < 3)) {
+      return showToast('Enter an activation code (at least 3 characters)', 'error');
+    }
+    if (!maxUses || maxUses < 1) return showToast('Maximum uses must be at least 1', 'error');
+
+    try {
+      if (editId) {
+        await DB.adminUpdateCode(editId, {
+          maxUses,
+          expiresAt,
+          clearExpiry: !expiry,
+          isActive
+        });
+        showToast('Activation code updated', 'success');
+      } else {
+        await DB.adminCreateCode(codeValue, codeType, expiresAt, maxUses, isActive);
+        showToast(`Code "${codeValue}" created (${maxUses} max uses)`, 'success');
+      }
+      $('#activation-code-modal')?.classList.remove('open');
+      await refreshAdminUI();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
   function bindBalanceModal() {
     $('#save-balance-btn')?.addEventListener('click', saveBalanceAdjustment);
   }
@@ -830,14 +1165,13 @@
       } catch (err) { showToast(err.message, 'error'); }
     });
 
-    $('#generate-free-btn')?.addEventListener('click', async () => {
-      const count = parseInt($('#free-code-count')?.value || '5', 10);
-      const expiry = $('#free-code-expiry')?.value;
-      const maxUses = parseInt($('#free-code-max-uses')?.value || '1', 10);
-      const expiresAt = expiry ? new Date(expiry).toISOString() : null;
+    $('#generate-random-free-btn')?.addEventListener('click', async () => {
+      const count = parseInt(prompt('How many random free codes to generate?', '5') || '0', 10);
+      if (!count || count < 1) return;
+      const maxUses = parseInt(prompt('Maximum uses per code?', '1') || '1', 10);
       try {
-        await DB.adminGenerateCodes(count, 'free', expiresAt, maxUses);
-        showToast(`${Math.min(count, 50)} free codes generated (no referral reward)`, 'success');
+        await DB.adminGenerateCodes(Math.min(count, 50), 'free', null, maxUses || 1);
+        showToast(`${Math.min(count, 50)} random free codes generated`, 'success');
         await refreshAdminUI();
       } catch (err) { showToast(err.message, 'error'); }
     });
@@ -863,16 +1197,72 @@
     $('#user-search')?.addEventListener('input', e => renderAdminUsers(e.target.value));
 
     document.body.addEventListener('click', async e => {
+      const copyBtn = e.target.closest('[data-copy-code]');
+      if (copyBtn) {
+        const code = copyBtn.dataset.copyCode;
+        const ok = await copyText(code);
+        showToast(ok ? `Copied "${code}"` : 'Copy failed', ok ? 'success' : 'error');
+      }
+      const editCode = e.target.closest('[data-edit-code]');
+      if (editCode) {
+        const codes = await DB.getActivationCodes('all', 'all');
+        const code = codes.find(c => c.code_id === editCode.dataset.editCode);
+        if (code) openActivationCodeModal(code);
+      }
       const disable = e.target.closest('[data-disable-code]');
       if (disable) {
-        try { await DB.adminDisableCode(disable.dataset.disableCode); showToast('Code disabled', 'info'); await renderAdminCodes(adminCodeFilter); }
-        catch (err) { showToast(err.message, 'error'); }
+        try {
+          await DB.adminDisableCode(disable.dataset.disableCode);
+          showToast('Code deactivated', 'info');
+          await renderAdminCodes(adminCodeFilter, adminCodeTypeFilter);
+        } catch (err) { showToast(err.message, 'error'); }
+      }
+      const activate = e.target.closest('[data-activate-code]');
+      if (activate) {
+        try {
+          await DB.adminActivateCode(activate.dataset.activateCode);
+          showToast('Code activated', 'success');
+          await renderAdminCodes(adminCodeFilter, adminCodeTypeFilter);
+        } catch (err) { showToast(err.message, 'error'); }
       }
       const del = e.target.closest('[data-delete-code]');
       if (del) {
         if (!confirm('Delete this code?')) return;
         try { await DB.adminDeleteCode(del.dataset.deleteCode); await refreshAdminUI(); }
         catch (err) { showToast(err.message, 'error'); }
+      }
+      const editReseller = e.target.closest('[data-edit-reseller]');
+      if (editReseller) {
+        const resellers = await DB.adminGetResellers();
+        const r = resellers.find(x => x.id === editReseller.dataset.editReseller);
+        if (r) openResellerModal(r);
+      }
+      const manageCodes = e.target.closest('[data-manage-reseller-codes]');
+      if (manageCodes) openResellerCodesModal(manageCodes.dataset.manageResellerCodes);
+      const deactivateReseller = e.target.closest('[data-deactivate-reseller]');
+      if (deactivateReseller) {
+        try {
+          await DB.adminToggleReseller(deactivateReseller.dataset.deactivateReseller, false);
+          showToast('Reseller deactivated', 'info');
+          await renderAdminResellers($('#reseller-search')?.value || '');
+        } catch (err) { showToast(err.message, 'error'); }
+      }
+      const activateReseller = e.target.closest('[data-activate-reseller]');
+      if (activateReseller) {
+        try {
+          await DB.adminToggleReseller(activateReseller.dataset.activateReseller, true);
+          showToast('Reseller activated', 'success');
+          await renderAdminResellers($('#reseller-search')?.value || '');
+        } catch (err) { showToast(err.message, 'error'); }
+      }
+      const delReseller = e.target.closest('[data-delete-reseller]');
+      if (delReseller) {
+        if (!confirm('Delete this reseller permanently?')) return;
+        try {
+          await DB.adminDeleteReseller(delReseller.dataset.deleteReseller);
+          showToast('Reseller deleted', 'info');
+          await renderAdminResellers($('#reseller-search')?.value || '');
+        } catch (err) { showToast(err.message, 'error'); }
       }
       const ban = e.target.closest('[data-ban-user]');
       if (ban) {
@@ -1004,6 +1394,7 @@
           $('#register-form')?.addEventListener('submit', handleRegister);
           break;
         case 'dashboard': await renderDashboard(); break;
+        case 'resellers': await initResellersPage(); break;
         case 'game': await initGame(); break;
         case 'withdrawal': await initWithdrawal(); break;
         case 'admin': await initAdmin(); break;

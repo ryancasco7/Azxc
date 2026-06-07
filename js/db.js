@@ -325,18 +325,58 @@ window.MathBOTDB = (function () {
 
   async function getActivationCodes(filter = 'all', typeFilter = 'all') {
     let q = supabase.from('activation_codes').select('*').order('generated_at', { ascending: false });
-    if (filter === 'used') q = q.eq('status', 'used');
-    if (filter === 'unused') q = q.eq('status', 'unused');
-    if (filter === 'expired') q = q.eq('status', 'expired');
     if (typeFilter === 'standard') q = q.eq('code_type', 'standard');
     if (typeFilter === 'free') q = q.eq('code_type', 'free');
     const { data } = await q;
-    return (data || []).map(c => ({
+    let codes = (data || []).map(c => ({
       ...c,
       code_type: c.code_type || 'standard',
       max_uses: c.max_uses ?? 1,
       use_count: c.use_count ?? 0
     }));
+
+    if (filter !== 'all') {
+      codes = codes.filter(c => {
+        const meta = computeCodeMeta(c);
+        if (filter === 'active') return meta.displayStatus === 'Active';
+        if (filter === 'inactive') return meta.displayStatus === 'Inactive';
+        if (filter === 'exhausted') return meta.displayStatus === 'Exhausted';
+        if (filter === 'expired') return meta.displayStatus === 'Expired';
+        if (filter === 'unused') return c.status === 'unused' && c.use_count === 0;
+        if (filter === 'used') return meta.displayStatus === 'Exhausted';
+        if (filter === 'disabled') return c.status === 'disabled';
+        return true;
+      });
+    }
+    return codes;
+  }
+
+  function computeCodeMeta(code) {
+    const maxUses = code.max_uses ?? 1;
+    const useCount = code.use_count ?? 0;
+    const remaining = Math.max(0, maxUses - useCount);
+    const expired = code.status === 'expired' ||
+      (code.expires_at && new Date(code.expires_at) < new Date());
+    const exhausted = useCount >= maxUses || code.status === 'used';
+    const disabled = code.status === 'disabled';
+
+    let displayStatus = 'Active';
+    if (disabled) displayStatus = 'Inactive';
+    else if (expired) displayStatus = 'Expired';
+    else if (exhausted) displayStatus = 'Exhausted';
+
+    return {
+      maxUses,
+      useCount,
+      remaining,
+      displayStatus,
+      expired,
+      exhausted,
+      disabled,
+      canEdit: !exhausted,
+      canDeactivate: !disabled && !exhausted && !expired,
+      canActivate: disabled && !exhausted && !expired
+    };
   }
 
   async function getActivePromotions() {
@@ -434,15 +474,33 @@ window.MathBOTDB = (function () {
     return data;
   }
 
-  async function adminCreateCode(codeId, codeType = 'standard', expiresAt = null, maxUses = 1) {
+  async function adminCreateCode(codeId, codeType = 'free', expiresAt = null, maxUses = 1, isActive = true) {
     const { data, error } = await supabase.rpc('admin_create_code', {
       p_code_id: codeId,
       p_code_type: codeType,
       p_expires_at: expiresAt,
-      p_max_uses: maxUses
+      p_max_uses: maxUses,
+      p_is_active: isActive
     });
     if (error) throw error;
     return data;
+  }
+
+  async function adminUpdateCode(codeId, { maxUses, expiresAt, clearExpiry, isActive } = {}) {
+    const { data, error } = await supabase.rpc('admin_update_code', {
+      p_code_id: codeId,
+      p_max_uses: maxUses ?? null,
+      p_expires_at: expiresAt ?? null,
+      p_clear_expiry: clearExpiry ?? false,
+      p_is_active: isActive ?? null
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function adminActivateCode(codeId) {
+    const { error } = await supabase.rpc('admin_activate_code', { p_code_id: codeId });
+    if (error) throw error;
   }
 
   async function adminDisableCode(codeId) {
@@ -492,6 +550,60 @@ window.MathBOTDB = (function () {
     return data;
   }
 
+  async function getActiveResellers() {
+    const { data, error } = await supabase.rpc('get_active_resellers');
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function adminGetResellers() {
+    const { data, error } = await supabase.rpc('admin_get_resellers');
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function adminSaveReseller(reseller) {
+    const { data, error } = await supabase.rpc('admin_save_reseller', {
+      p_id: reseller.id || null,
+      p_full_name: reseller.full_name,
+      p_facebook_link: reseller.facebook_link,
+      p_contact_number: reseller.contact_number,
+      p_location: reseller.location || null,
+      p_profile_picture_url: reseller.profile_picture_url || null,
+      p_notes: reseller.notes || null,
+      p_is_active: reseller.is_active !== false
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function adminToggleReseller(id, active) {
+    const { error } = await supabase.rpc('admin_toggle_reseller', { p_id: id, p_active: active });
+    if (error) throw error;
+  }
+
+  async function adminDeleteReseller(id) {
+    const { error } = await supabase.rpc('admin_delete_reseller', { p_id: id });
+    if (error) throw error;
+  }
+
+  async function adminAdjustResellerCodes(resellerId, actionType, amount, notes = null) {
+    const { data, error } = await supabase.rpc('admin_adjust_reseller_codes', {
+      p_reseller_id: resellerId,
+      p_action_type: actionType,
+      p_amount: amount,
+      p_notes: notes
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function adminGetResellerHistory(resellerId) {
+    const { data, error } = await supabase.rpc('admin_get_reseller_history', { p_reseller_id: resellerId });
+    if (error) throw error;
+    return data || [];
+  }
+
   /* Realtime */
   function subscribe(tables, callback) {
     const channel = supabase.channel('mathbot-realtime-' + Date.now());
@@ -516,11 +628,13 @@ window.MathBOTDB = (function () {
     getNotifications, markNotificationsRead,
     getPendingAmount, getUserWithdrawals, requestWithdrawal, getAllWithdrawals,
     getAdminStats, getLast7DaysUsers, getLast7DaysEarnings,
-    getActivationCodes, getAllUsers, getActivePromotions,
+    getActivationCodes, computeCodeMeta, getAllUsers, getActivePromotions,
     adminGetPromotions, adminSavePromotion, adminTogglePromotion, adminDeletePromotion,
     adminAdjustBalance, adminGetBalanceAdjustments, adminGetAuditLogs, adminGetAllNotifications,
-    adminGenerateCodes, adminCreateCode, adminDisableCode, adminDeleteCode,
+    adminGenerateCodes, adminCreateCode, adminUpdateCode, adminActivateCode, adminDisableCode, adminDeleteCode,
     adminUpdateUser, adminToggleBan, adminDeleteUser, adminProcessWithdrawal,
+    getActiveResellers, adminGetResellers, adminSaveReseller, adminToggleReseller,
+    adminDeleteReseller, adminAdjustResellerCodes, adminGetResellerHistory,
     subscribe, unsubscribeAll, mapProfile
   };
 })();

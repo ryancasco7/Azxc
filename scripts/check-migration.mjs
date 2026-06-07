@@ -21,12 +21,24 @@ const checks = [
     p_amount: 1, p_adjustment_type: 'add', p_reason: 'check', p_allow_negative: false
   })],
   ['admin_get_promotions RPC', () => sb.rpc('admin_get_promotions')],
+  ['admin_update_code RPC', () => sb.rpc('admin_update_code', {
+    p_code_id: 'NONEXISTENT-CODE-TEST',
+    p_max_uses: 10
+  })],
+  ['admin_activate_code RPC', () => sb.rpc('admin_activate_code', { p_code_id: 'NONEXISTENT-CODE-TEST' })],
+  ['resellers table', () => sb.from('resellers').select('id').limit(1)],
+  ['get_active_resellers RPC', () => sb.rpc('get_active_resellers')],
+  ['admin_get_resellers RPC', () => sb.rpc('admin_get_resellers')],
 ];
 
 let ok = 0;
 for (const [name, fn] of checks) {
   const { error } = await fn();
-  const pass = !error || (name.includes('admin_adjust_balance') && error.message.includes('User not found'));
+  const pass = !error || (
+    (name.includes('admin_adjust_balance') && error.message.includes('User not found')) ||
+    (name.includes('admin_update_code') && (error.message.includes('Code not found') || error.message.includes('Admin only'))) ||
+    (name.includes('admin_activate_code') && (error.message.includes('Code not found') || error.message.includes('Admin only')))
+  );
   console.log(pass ? '✓' : '✗', name, pass ? '' : '— ' + error.message);
   if (pass) ok++;
 }
@@ -34,7 +46,9 @@ for (const [name, fn] of checks) {
 console.log(`\n${ok}/${checks.length} checks passed`);
 if (ok < checks.length) {
   console.log('\nRun the migration in Supabase SQL Editor:');
-  console.log('  File: supabase/migration_admin_features.sql');
+  console.log('  Files: supabase/migration_admin_features.sql');
+  console.log('         supabase/migration_activation_code_management.sql');
+  console.log('         supabase/migration_resellers.sql');
   console.log('  URL:  https://supabase.com/dashboard/project/eiszdzotcatandzyityu/sql/new');
   process.exit(1);
 }

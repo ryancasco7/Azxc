@@ -154,6 +154,20 @@ img { max-width: 100%; }
 }
 .btn-icon:hover { background: var(--primary-light); }
 
+.code-copy-cell { display: flex; align-items: center; gap: 0.35rem; }
+.btn-copy-code {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  line-height: 1;
+  opacity: 0.65;
+  transition: var(--transition);
+}
+.btn-copy-code:hover { opacity: 1; background: var(--primary-light); }
+
 /* Cards */
 .card {
   background: var(--bg-card);
@@ -444,6 +458,44 @@ img { max-width: 100%; }
 
 /* Promotions */
 .promo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+
+.reseller-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+.reseller-card { padding: 1.25rem; }
+.reseller-card-header { display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; }
+.reseller-card-header h3 { margin: 0.25rem 0 0; font-size: 1.1rem; }
+.reseller-verified { display: inline-block; font-size: 0.75rem; font-weight: 600; color: var(--success); }
+.reseller-card-body p { margin: 0.4rem 0; font-size: 0.9rem; }
+.reseller-card-body a { color: var(--primary); word-break: break-all; }
+.reseller-stock.in-stock { color: var(--success); }
+.reseller-stock.out-of-stock { color: var(--danger); font-weight: 600; }
+.reseller-out-of-stock { opacity: 0.85; }
+.reseller-avatar, .reseller-avatar-lg {
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--primary-light);
+}
+.reseller-avatar { width: 40px; height: 40px; }
+.reseller-avatar-lg { width: 56px; height: 56px; }
+.reseller-avatar-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--primary);
+  background: var(--primary-light);
+}
+
+.admin-toolbar input[type="search"],
+.admin-toolbar select {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+}
 .promo-card { position: relative; padding: 1.25rem; }
 .promo-card h4 { margin-bottom: 0.35rem; }
 .promo-bonus { font-size: 1.25rem; font-weight: 700; color: var(--success); margin: 0.5rem 0; }

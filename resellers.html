@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authorized Code Resellers — MathBOT</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="resellers" class="page">
+  <header class="header">
+    <div class="header-inner">
+      <a href="dashboard.html" class="logo"><img src="logo.png" alt="MathBOT" class="logo-img"></a>
+      <div class="header-actions">
+        <button class="btn-icon" data-theme-toggle>🌓</button>
+        <button class="btn btn-outline btn-sm" data-logout>Logout</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container content-area">
+    <h2 class="mb-1">Authorized Code Resellers</h2>
+    <p class="text-muted mb-2">Buy activation codes only from these verified resellers to avoid scams.</p>
+
+    <div class="admin-toolbar mb-2">
+      <input type="search" id="reseller-user-search" placeholder="Search by name...">
+      <select id="reseller-user-sort">
+        <option value="available-desc">Available Codes (High to Low)</option>
+        <option value="available-asc">Available Codes (Low to High)</option>
+        <option value="name-asc">Name (A–Z)</option>
+      </select>
+    </div>
+
+    <div id="resellers-list" class="reseller-grid"></div>
+  </main>
+
+  <nav class="bottom-nav">
+    <a href="dashboard.html" data-nav="dashboard"><span class="nav-icon">📊</span>Dashboard</a>
+    <a href="game.html" data-nav="game"><span class="nav-icon">🎮</span>Play</a>
+    <a href="withdrawal.html" data-nav="withdrawal"><span class="nav-icon">💳</span>Withdraw</a>
+  </nav>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/db.js?v=8"></script>
+  <script src="js/app.js?v=8"></script>
+</body>
+</html>
