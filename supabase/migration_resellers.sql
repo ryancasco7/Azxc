@@ -276,6 +276,7 @@ CREATE POLICY "Admin manage reseller history" ON reseller_allocation_history FOR
 ALTER PUBLICATION supabase_realtime ADD TABLE resellers;
 
 GRANT EXECUTE ON FUNCTION get_active_resellers TO authenticated;
+GRANT EXECUTE ON FUNCTION get_active_resellers TO anon;
 GRANT EXECUTE ON FUNCTION admin_get_resellers TO authenticated;
 GRANT EXECUTE ON FUNCTION admin_save_reseller TO authenticated;
 GRANT EXECUTE ON FUNCTION admin_toggle_reseller TO authenticated;

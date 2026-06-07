@@ -827,6 +827,7 @@
     if (!auth) return;
 
     const render = () => renderUserResellers(
+      '#resellers-list',
       $('#reseller-user-search')?.value || '',
       $('#reseller-user-sort')?.value || 'available-desc'
     );
@@ -838,8 +839,22 @@
     DB.subscribe(['resellers'], render);
   }
 
-  async function renderUserResellers(search = '', sort = 'available-desc') {
-    const el = $('#resellers-list');
+  async function initLandingPage() {
+    const render = () => renderUserResellers(
+      '#landing-resellers-list',
+      $('#landing-reseller-search')?.value || '',
+      $('#landing-reseller-sort')?.value || 'available-desc'
+    );
+
+    $('#landing-reseller-search')?.addEventListener('input', render);
+    $('#landing-reseller-sort')?.addEventListener('change', render);
+
+    await render();
+    DB.subscribe(['resellers'], render);
+  }
+
+  async function renderUserResellers(listSelector = '#resellers-list', search = '', sort = 'available-desc') {
+    const el = $(listSelector);
     if (!el) return;
     try {
       userResellersCache = await DB.getActiveResellers();
@@ -1385,6 +1400,7 @@
       switch (page) {
         case 'index':
           if (session && profile) window.location.replace(profile.role === 'admin' ? 'admin.html' : 'dashboard.html');
+          else await initLandingPage();
           break;
         case 'login':
           if (session && profile) window.location.replace(profile.role === 'admin' ? 'admin.html' : 'dashboard.html');

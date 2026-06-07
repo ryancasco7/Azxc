@@ -29,10 +29,8 @@
       <a href="login.html" class="btn btn-outline">Sign In</a>
     </div>
     <p class="hero-activation-link">
-      <a href="https://m.me/1065238593348800?ref=w55380505" target="_blank" rel="noopener noreferrer">
-        Buy Activation Code
-      </a>
-      <span class="text-muted"> — purchase via our Messenger chatbot</span>
+      <a href="#resellers">Authorized Code Resellers</a>
+      <span class="text-muted"> — verified sellers only</span>
     </p>
   </section>
 
@@ -54,8 +52,22 @@
     </div>
   </section>
 
+  <section id="resellers" class="container section landing-resellers-section">
+    <h2 class="section-title text-center">Authorized Code Resellers</h2>
+    <p class="text-muted text-center mb-2">Buy activation codes only from these verified resellers to avoid scams.</p>
+    <div class="admin-toolbar mb-2 landing-reseller-toolbar">
+      <input type="search" id="landing-reseller-search" placeholder="Search by name...">
+      <select id="landing-reseller-sort">
+        <option value="available-desc">Available Codes (High to Low)</option>
+        <option value="available-asc">Available Codes (Low to High)</option>
+        <option value="name-asc">Name (A–Z)</option>
+      </select>
+    </div>
+    <div id="landing-resellers-list" class="reseller-grid"></div>
+  </section>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/db.js?v=5"></script>
-  <script src="js/app.js?v=5"></script>
+  <script src="js/db.js?v=8"></script>
+  <script src="js/app.js?v=8"></script>
 </body>
 </html>
